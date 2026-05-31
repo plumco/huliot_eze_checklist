@@ -1,425 +1,519 @@
-import streamlit as st
-import io
 import os
-import glob
+import re
+import io
+import streamlit as st
+from docx import Document
 
-try:
-    import docx
-except ImportError:
-    st.error("Please ensure the `python-docx` package is installed. Run: pip install python-docx")
-
+# Set page layout and design theme
 st.set_page_config(
-    page_title="Huliot India - Workstation Deployer",
+    page_title="Huliot India - Word Checklist Workstation",
     page_icon="💼",
     layout="wide"
 )
 
-def replace_text_in_paragraph(paragraph, old_text, new_text):
-    """
-    Safely replaces text within a paragraph run-by-run.
-    This preserves exact font formatting (bold, color, size, underlines).
-    """
-    if old_text in paragraph.text:
-        # First try to find a single run that contains the target phrase
-        for run in paragraph.runs:
-            if old_text in run.text:
-                run.text = run.text.replace(old_text, new_text)
-                return True
-        
-        # Fallback split-run search: Join adjacent runs if needed
-        full_text = ""
-        for run in paragraph.runs:
-            full_text += run.text
-        
-        if old_text in full_text:
-            # Safely replace across the entire paragraph text block if isolated runs failed
-            paragraph.text = paragraph.text.replace(old_text, new_text)
-            return True
-    return False
-
-def toggle_checkbox_in_paragraph(paragraph, target_phrase, check=True):
-    """
-    Finds a target phrase inside a paragraph and toggles standard Word unicode
-    checkbox characters from ☐ (unchecked) to ☑ (checked) or vice-versa.
-    """
-    if target_phrase.lower() in paragraph.text.lower():
-        for run in paragraph.runs:
-            if "☐" in run.text or "☑" in run.text:
-                if check:
-                    run.text = run.text.replace("☐", "☑")
-                else:
-                    run.text = run.text.replace("☑", "☐")
-
-def process_document(template_bytes, data):
-    """
-    Loads the original Word document template binary, parses all paragraph runs 
-    and table cell boundaries, and outputs the filled document stream.
-    """
-    doc = docx.Document(io.BytesIO(template_bytes))
-    
-    def process_p(paragraph):
-        # 1. Base Text Field Variable Replacements
-        if "Project No. / Bitrix deal ID:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "     ", data['project_no'])
-            replace_text_in_paragraph(paragraph, "_____________", data['project_no'])
-            
-        if "Date:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "Date:", f"Date: {data['date']}")
-            
-        if "Huliot Sales Person & No:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "Huliot Sales Person & No:", f"Huliot Sales Person & No: {data['sales_person']} {data['sales_phone']}")
-            
-        if "Project Name & Address:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "Project Name & Address:", f"Project Name & Address: {data['project_name']} {data['project_address']}")
-            
-        if "City:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "City:", f"City: {data['city']}")
-            
-        if "Costumer / Client Name & No:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "Costumer / Client Name & No:", f"Costumer / Client Name & No: {data['client_name']} {data['client_phone']}")
-            
-        if "Architect Name & No:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "Architect Name & No:", f"Architect Name & No: {data['architect_name']} {data['architect_phone']}")
-            
-        if "MEP Consultant Name & No:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "MEP Consultant Name & No:", f"MEP Consultant Name & No: {data['mep_name']} {data['mep_phone']}")
-
-        if "Estimated date to close the offer" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "………………………….", data['offer_date'])
-        
-        if "Probability ---" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "50%", f"{data['probability']}%")
-
-        # 2. Dynamic Explanations / Summary Mapping Updates (Page 3 Bottom)
-        if "Toilet is suspended: -" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "Toilet is suspended: -", f"Toilet is suspended: - {data['toilet_suspended']}")
-        if "Kitchen / Utility is sunken (How much in mm): -" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "Kitchen / Utility is sunken (How much in mm): -", f"Kitchen / Utility is sunken (How much in mm): - {data['kitchen_sunken']}")
-        if "Kitchen is suspended: -" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "Kitchen is suspended: -", f"Kitchen is suspended: - {data['kitchen_suspended']}")
-
-        # 3. Drawing Checkbox Toggles
-        toggle_checkbox_in_paragraph(paragraph, "All or Typical Floor drawing", data['drw_typical'])
-        toggle_checkbox_in_paragraph(paragraph, "Typical Toilet and kitchen section", data['drw_toilet_kitchen'])
-        toggle_checkbox_in_paragraph(paragraph, "Podium/ Diversion/ Basement drawing", data['drw_podium'])
-        toggle_checkbox_in_paragraph(paragraph, "Full Building section view", data['drw_building'])
-        toggle_checkbox_in_paragraph(paragraph, "Only Architectural layout", data['drw_arch_only'])
-        toggle_checkbox_in_paragraph(paragraph, "Any Other drawing attached", data['drw_other'])
-        if data['drw_other'] and data['drw_other_text']:
-            replace_text_in_paragraph(paragraph, "Any Other drawing attached if any", f"Any Other drawing attached if any: {data['drw_other_text']}")
-
-        # 4. Drainage Spec Toggles
-        toggle_checkbox_in_paragraph(paragraph, "Internal Toilets -Ultra Silent", data['drn_int_us'])
-        toggle_checkbox_in_paragraph(paragraph, "Internal Toilets -HT Pro", data['drn_int_ht'])
-        toggle_checkbox_in_paragraph(paragraph, "Vertical/ External stack -Ultra Silent", data['drn_vert_us'])
-        toggle_checkbox_in_paragraph(paragraph, "Vertical/ External stack -HT Pro", data['drn_vert_ht'])
-        toggle_checkbox_in_paragraph(paragraph, "Podium/Diversion/ Basement – Ultra Silent", data['drn_pod_us'])
-        toggle_checkbox_in_paragraph(paragraph, "Podium/Diversion/ Basement - HT Pro", data['drn_pod_ht'])
-
-        # 5. Water Supply Spec Toggles
-        toggle_checkbox_in_paragraph(paragraph, "Internal Pipe  (PERT/AL/PERT)", data['ws_int_pipe_pert'])
-        toggle_checkbox_in_paragraph(paragraph, "Internal Pipe  (PPR)", data['ws_int_pipe_ppr'])
-        toggle_checkbox_in_paragraph(paragraph, "Internal Fittings   PPSU", data['ws_int_fit_ppsu'])
-        toggle_checkbox_in_paragraph(paragraph, "Internal Fittings   BRASS", data['ws_int_fit_brass'])
-        toggle_checkbox_in_paragraph(paragraph, "External Pipe  (PERT/AL/PERT)", data['ws_ext_pipe_pert'])
-        toggle_checkbox_in_paragraph(paragraph, "External Pipe  (PPR)", data['ws_ext_pipe_ppr'])
-        toggle_checkbox_in_paragraph(paragraph, "External Fittings   PPSU", data['ws_ext_fit_ppsu'])
-        toggle_checkbox_in_paragraph(paragraph, "External Fittings   BRASS", data['ws_ext_fit_brass'])
-        toggle_checkbox_in_paragraph(paragraph, "Terrace looping Pipe  (PERT/AL/PERT)", data['ws_ter_pipe_pert'])
-        toggle_checkbox_in_paragraph(paragraph, "Terrace looping Pipe  (PPR)", data['ws_ter_pipe_ppr'])
-        toggle_checkbox_in_paragraph(paragraph, "Terrace looping Fittings   PPSU", data['ws_ter_fit_ppsu'])
-        toggle_checkbox_in_paragraph(paragraph, "Terrace looping Fittings   BRASS", data['ws_ter_fit_brass'])
-
-        # 6. Priority Toggles
-        toggle_checkbox_in_paragraph(paragraph, "A: High", data['priority'] == 'A')
-        toggle_checkbox_in_paragraph(paragraph, "B: Medium", data['priority'] == 'B')
-        toggle_checkbox_in_paragraph(paragraph, "C: Low", data['priority'] == 'C')
-
-        # 7. Building Configuration Toggles
-        for b_type in ["Office / commercial", "Shopping centre", "Hotel / Restaurant", "Industrial", 
-                       "Hospital / nursing home", "School", "Social housing", "Sport facility", "Infrastructure", "Residential"]:
-            if data['building_type'] == b_type:
-                toggle_checkbox_in_paragraph(paragraph, b_type, True)
-            else:
-                toggle_checkbox_in_paragraph(paragraph, b_type, False)
-
-        # 8. Structural Values
-        if "No of Typical floors:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "     ", data['floors'])
-        if "No of shafts:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "     ", data['shafts'])
-        if "No of rooms:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "     ", data['rooms'])
-        if "Room/floor to floor height in meter:" in paragraph.text:
-            replace_text_in_paragraph(paragraph, "     ", data['floor_height'])
-
-        # 9. Calculation Routing & Systems
-        toggle_checkbox_in_paragraph(paragraph, "Single Stack System – HULIOT design", data['calc_drainage'] == "single-stack")
-        toggle_checkbox_in_paragraph(paragraph, "Two Stack System (soil / waste", data['calc_drainage'] == "two-stack")
-        toggle_checkbox_in_paragraph(paragraph, "Drainage- Same as per Client/ Consultant", data['calc_drainage'] == "consultant-drawing")
-
-        for c_type in ["PVC", "Cast Iron", "HDPE", "CPVC/UPVC/OTHER"]:
-            toggle_checkbox_in_paragraph(paragraph, c_type, c_type in data['boq_compare'])
-
-        # 10. Pipeline Routing Specifications
-        toggle_checkbox_in_paragraph(paragraph, "Within false ceiling/ ceiling suspended", data['rte_ceiling'])
-        if "Toilet Sunken-" in paragraph.text:
-            val = f"{data['rte_toilet_mm']} mm" if data['rte_toilet_sunken'] else "No"
-            replace_text_in_paragraph(paragraph, "     ", val)
-        if "Kitchen Sunken-" in paragraph.text:
-            val = f"{data['rte_kitchen_mm']} mm" if data['rte_kitchen_sunken'] else "No"
-            replace_text_in_paragraph(paragraph, "     ", val)
-        if "Utility Sunken-" in paragraph.text:
-            val = f"{data['rte_utility_mm']} mm" if data['rte_utility_sunken'] else "No"
-            replace_text_in_paragraph(paragraph, "     ", val)
-
-        toggle_checkbox_in_paragraph(paragraph, "Within false ceiling & Pipe drop ceiling to wall chasing", data['ws_ceiling_drop'])
-        toggle_checkbox_in_paragraph(paragraph, "In wall chasing piping full - Internal toilets", data['ws_wall_case'])
-
-        # 11. Service Floor Elements
-        toggle_checkbox_in_paragraph(paragraph, "Service floor available:   Yes", data['service_floor'] == "Yes")
-        toggle_checkbox_in_paragraph(paragraph, "No    if yes where:", data['service_floor'] == "No")
-        if data['service_floor'] == "Yes" and data['service_floor_where']:
-            replace_text_in_paragraph(paragraph, "     ", data['service_floor_where'])
-
-        toggle_checkbox_in_paragraph(paragraph, "one shaft", data['calc_for'] == "one-shaft")
-        toggle_checkbox_in_paragraph(paragraph, "all shafts", data['calc_for'] == "all-shafts")
-        toggle_checkbox_in_paragraph(paragraph, "including basement", data['calc_for'] == "with-basement")
-
-    # Scan standard body paragraphs
-    for p in doc.paragraphs:
-        process_p(p)
-    
-    # Scan cells inside nested template tables
-    for t in doc.tables:
-        for r in t.rows:
-            for c in r.cells:
-                for p in c.paragraphs:
-                    process_p(p)
-                # Recurse inside nested tables if present
-                for nested in c.tables:
-                    for nr in nested.rows:
-                        for nc in nr.cells:
-                            for np in nc.paragraphs:
-                                process_p(np)
-
-    out_stream = io.BytesIO()
-    doc.save(out_stream)
-    return out_stream.getvalue()
-
+# Custom branding CSS
 st.markdown("""
-    <div style='background-color:#0f5132; padding:20px; border-radius:12px; margin-bottom:20px;'>
-        <h1 style='color:white; margin:0; font-family:sans-serif;'>💼 Huliot India</h1>
-        <p style='color:#d1e7dd; margin:5px 0 0 0; font-size:14px; font-weight:bold;'>Checklist Workstation - High-Fidelity Word Generator</p>
-    </div>
-""", unsafe_allow_html=True)
+    <style>
+    .brand-title {
+        color: #2E7D32;
+        font-family: 'Arial Black', sans-serif;
+        font-size: 28px;
+        font-weight: 900;
+        letter-spacing: -1px;
+        margin-bottom: 0px;
+    }
+    .brand-subtitle {
+        color: #888888;
+        font-size: 11px;
+        font-weight: bold;
+        letter-spacing: 3px;
+        margin-top: 0px;
+        margin-bottom: 20px;
+    }
+    .highlight-box {
+        background-color: #FFFFF0;
+        border: 1px solid #FFEB3B;
+        padding: 12px;
+        border-radius: 6px;
+        margin-bottom: 15px;
+    }
+    </style>
+""", unsafe_allow_class_html=True)
 
-# Auto-detect any Checklist docx file in the repository
-detected_templates = glob.glob("Checklist*.docx")
-template_data = None
+INIT_VALUES = {
+    "date": "",
+    "projectNo": "", 
+    "salesPerson": "", 
+    "salesPhone": "",
+    "projectName": "", 
+    "projectAddress": "", 
+    "city": "",
+    "clientName": "", 
+    "clientPhone": "",
+    "architectName": "", 
+    "architectPhone": "",
+    "mepName": "", 
+    "mepPhone": "",
 
-if detected_templates:
-    detected_file = detected_templates[0]
-    with open(detected_file, "rb") as f:
-        template_data = f.read()
-    st.success(f"✔️ Automatically loaded original template layout: `{detected_file}` from repository.")
+    # Drawing Checklist
+    "drwTypical": False, 
+    "drwToiletKitchen": False, 
+    "drwPodium": False,
+    "drwBuilding": False, 
+    "drwArchOnly": False, 
+    "drwOther": False, 
+    "drwOtherText": "",
+
+    # Drainage checklist variables
+    "drnIntUS": False, 
+    "drnIntHT": False,
+    "drnVertUS": False, 
+    "drnVertHT": False,
+    "drnPodUS": False, 
+    "drnPodHT": False,
+
+    # Water supply checklist variables
+    "wsIntPipePERT": False, 
+    "wsIntPipePPR": False,
+    "wsIntFitPPSU": False, 
+    "wsIntFitBrass": False,
+    "wsExtPipePERT": False, 
+    "wsExtPipePPR": False,
+    "wsExtFitPPSU": False, 
+    "wsExtFitBrass": False,
+    "wsTerPipePERT": False, 
+    "wsTerPipePPR": False,
+    "wsTerFitPPSU": False, 
+    "wsTerFitBrass": False,
+
+    # Building specs
+    "priority": "", 
+    "buildingType": "",
+    "floors": "", 
+    "shafts": "", 
+    "rooms": "", 
+    "floorHeight": "",
+    "offerDate": "", 
+    "probability": "50",
+
+    # Drainage calculations style
+    "calcDrainage": "", 
+    "boqCompare": [], 
+    "calcFor": "",
+
+    # Routing checklist variables
+    "rteCeiling": False,
+    "rteToiletSunken": False, 
+    "rteToiletMM": "",
+    "rteKitchenSunken": False, 
+    "rteKitchenMM": "",
+    "rteUtilitySunken": False, 
+    "rteUtilityMM": "",
+    "wsCeilingDrop": False, 
+    "wsWallChase": False,
+    "serviceFloor": "", 
+    "serviceFloorWhere": "",
+    "notes": "",
+}
+
+# Initialize state structures
+for key, val in INIT_VALUES.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
+
+st.markdown('<div class="brand-title">Huliot<span style="color:#555555; font-weight:300;">India</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="brand-subtitle">WE MAKE IT FLOW</div>', unsafe_allow_html=True)
+
+st.title("Checklist Workstation & DOCX Exporter")
+st.write("Fill in the fields below. The application will find your template and replace the placeholders and toggle checkboxes verbatim.")
+
+st.sidebar.header("System Controls")
+
+# Create a clean side-by-side or full-width layout for the Reset action
+if st.sidebar.button("🔄 Reset & Refresh Form", use_container_width=True, help="Wipes all entered inputs and reloads the screen clean."):
+    for key in INIT_VALUES.keys():
+        st.session_state[key] = INIT_VALUES[key]
+    st.success("All fields cleared successfully!")
+    st.rerun()
+
+# Find the template file inside local workspace dynamically
+local_templates = [f for f in os.listdir(".") if f.startswith("Checklist") and f.endswith(".docx")]
+template_file_path = None
+
+if local_templates:
+    template_file_path = local_templates[0]
+    st.sidebar.success(f"Detected committed file: `{template_file_path}`")
 else:
-    st.warning("⚠️ Original template file was not found in the root directory. Please upload it below to process the checklist.")
+    st.sidebar.warning("No committed Word template starting with 'Checklist' detected in root directory.")
 
-uploaded_template = st.file_uploader(
-    "Upload original file: 'Checklist -Questinorie for Huliot (Drainage and Water supply)_3.docx'",
-    type=["docx"]
+# File uploader fallback option
+uploaded_template = st.sidebar.file_uploader(
+    "Optionally upload a different template file (.docx)", 
+    type=["docx"], 
+    help="Upload the official Huliot checklist template to preserve original fonts."
 )
 
+st.header("General Information")
+
+col1, col2 = st.columns(2)
+with col1:
+    st.session_state.date = st.text_input("Date", value=st.session_state.date, placeholder="DD.MM.YYYY")
+    st.session_state.projectNo = st.text_input("Project No. / Bitrix deal ID", value=st.session_state.projectNo)
+    st.session_state.salesPerson = st.text_input("Huliot Sales Person Name", value=st.session_state.salesPerson)
+    st.session_state.salesPhone = st.text_input("Sales Person Phone / No", value=st.session_state.salesPhone)
+    st.session_state.projectName = st.text_input("Project Name & Address", value=st.session_state.projectName)
+
+with col2:
+    st.session_state.city = st.text_input("City", value=st.session_state.city)
+    st.session_state.clientName = st.text_input("Customer / Client Name & No", value=st.session_state.clientName)
+    st.session_state.architectName = st.text_input("Architect Name & No", value=st.session_state.architectName)
+    st.session_state.mepName = st.text_input("MEP Consultant Name & No", value=st.session_state.mepName)
+
+st.markdown("""
+<div class="highlight-box">
+    <strong>Material Composition: Consider</strong><br/>
+    Kindly click on checkboxes below — Checked values will be represented as checked (☑) in your downloaded Word file without changing any alignments or formatting guidelines.
+</div>
+""", unsafe_allow_html=True)
+
+st.subheader("Drawing attached in email:-")
+col_drw1, col_drw2 = st.columns(2)
+with col_drw1:
+    st.session_state.drwTypical = st.checkbox("All or Typical Floor drawing with consultant/ client plumbing layout attached", value=st.session_state.drwTypical)
+    st.session_state.drwToiletKitchen = st.checkbox("Typical Toilet and kitchen section details attached", value=st.session_state.drwToiletKitchen)
+    st.session_state.drwPodium = st.checkbox("Podium/ Diversion/ Basement drawing attached", value=st.session_state.drwPodium)
+with col_drw2:
+    st.session_state.drwBuilding = st.checkbox("Full Building section view attached for Building height / podium/ till basement/Ground", value=st.session_state.drwBuilding)
+    st.session_state.drwArchOnly = st.checkbox("Only Architectural layout attached", value=st.session_state.drwArchOnly)
+    st.session_state.drwOther = st.checkbox("Any Other drawing attached", value=st.session_state.drwOther)
+
+if st.session_state.drwOther:
+    st.session_state.drwOtherText = st.text_input("Specify other drawing details", value=st.session_state.drwOtherText)
+
+st.subheader("Drainage:")
+col_drn1, col_drn2 = st.columns(2)
+with col_drn1:
+    st.session_state.drnIntUS = st.checkbox("Internal Toilets -Ultra Silent consider", value=st.session_state.drnIntUS)
+    st.session_state.drnIntHT = st.checkbox("Internal Toilets -HT Pro consider", value=st.session_state.drnIntHT)
+    st.session_state.drnVertUS = st.checkbox("Vertical/ External stack -Ultra Silent consider", value=st.session_state.drnVertUS)
+with col_drn2:
+    st.session_state.drnVertHT = st.checkbox("Vertical/ External stack -HT Pro consider", value=st.session_state.drnVertHT)
+    st.session_state.drnPodUS = st.checkbox("Podium/Diversion/ Basement – Ultra Silent consider", value=st.session_state.drnPodUS)
+    st.session_state.drnPodHT = st.checkbox("Podium/Diversion/ Basement - HT Pro consider", value=st.session_state.drnPodHT)
+
+st.subheader("Water Supply:")
+col_ws1, col_ws2, col_ws3 = st.columns(3)
+with col_ws1:
+    st.write("**Internal Pipe & Fittings**")
+    st.session_state.wsIntPipePERT = st.checkbox("Internal Pipe (PERT/AL/PERT) Consider", value=st.session_state.wsIntPipePERT)
+    st.session_state.wsIntPipePPR = st.checkbox("Internal Pipe (PPR) Consider", value=st.session_state.wsIntPipePPR)
+    st.session_state.wsIntFitPPSU = st.checkbox("Internal Fittings PPSU Consider", value=st.session_state.wsIntFitPPSU)
+    st.session_state.wsIntFitBrass = st.checkbox("Internal Fittings BRASS Consider", value=st.session_state.wsIntFitBrass)
+
+with col_ws2:
+    st.write("**External Pipe & Fittings**")
+    st.session_state.wsExtPipePERT = st.checkbox("External Pipe (PERT/AL/PERT) Consider", value=st.session_state.wsExtPipePERT)
+    st.session_state.wsExtPipePPR = st.checkbox("External Pipe (PPR) Consider", value=st.session_state.wsExtPipePPR)
+    st.session_state.wsExtFitPPSU = st.checkbox("External Fittings PPSU Consider", value=st.session_state.wsExtFitPPSU)
+    st.session_state.wsExtFitBrass = st.checkbox("External Fittings BRASS Consider", value=st.session_state.wsExtFitBrass)
+
+with col_ws3:
+    st.write("**Terrace looping Pipe & Fittings**")
+    st.session_state.wsTerPipePERT = st.checkbox("Terrace looping Pipe (PERT/AL/PERT) Consider", value=st.session_state.wsTerPipePERT)
+    st.session_state.wsTerPipePPR = st.checkbox("Terrace looping Pipe (PPR) Consider", value=st.session_state.wsTerPipePPR)
+    st.session_state.wsTerFitPPSU = st.checkbox("Terrace looping Fittings PPSU Consider", value=st.session_state.wsTerFitPPSU)
+    st.session_state.wsTerFitBrass = st.checkbox("Terrace looping Fittings BRASS Consider", value=st.session_state.wsTerFitBrass)
+
+st.subheader("Priority & Building Information")
+col_bld1, col_bld2 = st.columns(2)
+
+with col_bld1:
+    st.session_state.priority = st.selectbox("Priority", ["", "A: High", "B: Medium", "C: Low"], index=["", "A: High", "B: Medium", "C: Low"].index(st.session_state.priority) if st.session_state.priority in ["", "A: High", "B: Medium", "C: Low"] else 0)
+    st.session_state.buildingType = st.selectbox("Kind of Building", [
+        "", "Office / commercial building", "Shopping centre", "Hotel / Restaurant",
+        "Industrial building", "Hospital / nursing home", "School building",
+        "Social housing", "Sport facility", "Infrastructure buildings", "Residential building"
+    ], index=[
+        "", "Office / commercial building", "Shopping centre", "Hotel / Restaurant",
+        "Industrial building", "Hospital / nursing home", "School building",
+        "Social housing", "Sport facility", "Infrastructure buildings", "Residential building"
+    ].index(st.session_state.buildingType) if st.session_state.buildingType in [
+        "", "Office / commercial building", "Shopping centre", "Hotel / Restaurant",
+        "Industrial building", "Hospital / nursing home", "School building",
+        "Social housing", "Sport facility", "Infrastructure buildings", "Residential building"
+    ] else 0)
+
+with col_bld2:
+    st.session_state.floors = st.text_input("No of Typical floors", value=st.session_state.floors)
+    st.session_state.shafts = st.text_input("No of shafts", value=st.session_state.shafts)
+    st.session_state.rooms = st.text_input("No of rooms", value=st.session_state.rooms)
+    st.session_state.floorHeight = st.text_input("Room/floor to floor height in meter", value=st.session_state.floorHeight)
+
+col_prob1, col_prob2 = st.columns(2)
+with col_prob1:
+    st.session_state.offerDate = st.text_input("Estimated date to close the offer", value=st.session_state.offerDate, placeholder="e.g. 15.08.2026")
+with col_prob2:
+    st.session_state.probability = st.text_input("Probability %", value=st.session_state.probability)
+
+st.subheader("Calculation Information & Routing")
+
+col_calc1, col_calc2 = st.columns(2)
+with col_calc1:
+    st.session_state.calcDrainage = st.radio("Drainage system required", [
+        "Single Stack System – HULIOT design drawing, BOQ & Quotation required",
+        "Two Stack System (soil / waste / vent) – HULIOT design drawing, BOQ & Quotation required- if only architectural drawing is available",
+        "Drainage- Same as per Client/ Consultant drawing -BOQ -Quantity required only."
+    ], index=0)
+
+    st.write("**BOQ is compared with:**")
+    st.session_state.boqCompare = []
+    c_pvc = st.checkbox("PVC")
+    c_ci = st.checkbox("Cast Iron")
+    c_hdpe = st.checkbox("HDPE")
+    c_oth = st.checkbox("CPVC/UPVC/OTHER")
+    if c_pvc: st.session_state.boqCompare.append("PVC")
+    if c_ci: st.session_state.boqCompare.append("Cast Iron")
+    if c_hdpe: st.session_state.boqCompare.append("HDPE")
+    if c_oth: st.session_state.boqCompare.append("CPVC/UPVC/OTHER")
+
+with col_calc2:
+    st.write("**Drainage Pipe routing:**")
+    st.session_state.rteCeiling = st.checkbox("Within false ceiling/ ceiling suspended / underslung system", value=st.session_state.rteCeiling)
+    st.session_state.rteToiletSunken = st.checkbox("Toilet Sunken option", value=st.session_state.rteToiletSunken)
+    if st.session_state.rteToiletSunken:
+        st.session_state.rteToiletMM = st.text_input("Toilet Sunken Depth (mm)", value=st.session_state.rteToiletMM)
+    
+    st.session_state.rteKitchenSunken = st.checkbox("Kitchen Sunken option", value=st.session_state.rteKitchenSunken)
+    if st.session_state.rteKitchenSunken:
+        st.session_state.rteKitchenMM = st.text_input("Kitchen Sunken Depth (mm)", value=st.session_state.rteKitchenMM)
+
+    st.session_state.rteUtilitySunken = st.checkbox("Utility Sunken option", value=st.session_state.rteUtilitySunken)
+    if st.session_state.rteUtilitySunken:
+        st.session_state.rteUtilityMM = st.text_input("Utility Sunken Depth (mm)", value=st.session_state.rteUtilityMM)
+
+    st.write("**For water supply Pipe routing:**")
+    st.session_state.wsCeilingDrop = st.checkbox("Within false ceiling & Pipe drop ceiling to wall chasing fixture point consider–Internal Toilets", value=st.session_state.wsCeilingDrop)
+    st.session_state.wsWallChase = st.checkbox("In wall chasing piping full - Internal toilets", value=st.session_state.wsWallChase)
+
+col_svc1, col_svc2 = st.columns(2)
+with col_svc1:
+    st.session_state.serviceFloor = st.selectbox("Service floor available", ["", "Yes", "No"], index=["", "Yes", "No"].index(st.session_state.serviceFloor) if st.session_state.serviceFloor in ["", "Yes", "No"] else 0)
+    if st.session_state.serviceFloor == "Yes":
+        st.session_state.serviceFloorWhere = st.text_input("Where is the service floor located?", value=st.session_state.serviceFloorWhere)
+
+with col_svc2:
+    st.session_state.calcFor = st.selectbox("Calculation Design / BOQ for", ["", "one shaft", "all shafts", "including basement"], index=["", "one shaft", "all shafts", "including basement"].index(st.session_state.calcFor) if st.session_state.calcFor in ["", "one shaft", "all shafts", "including basement"] else 0)
+
+st.session_state.notes = st.text_area("Additional Information / Technical Requirements", value=st.session_state.notes)
+
+st.subheader("Generate & Download Verbatim Document")
+
+active_template_source = None
 if uploaded_template is not None:
-    template_data = uploaded_template.read()
-    st.success("✔️ Custom checklist template uploaded successfully!")
+    active_template_source = uploaded_template
+elif template_file_path is not None:
+    active_template_source = template_file_path
 
-if template_data is not None:
-    tab1, tab2, tab3 = st.tabs(["📝 General & Drawings", "💧 Piping & Design", "🏢 Building & Routing"])
-    
-    with tab1:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("General Information")
-            date = st.date_input("Date", value=None)
-            project_no = st.text_input("Project No. / Bitrix deal ID", "HPL-2026-004")
-            sales_person = st.text_input("Huliot Sales Representative", "Mehta Patel")
-            sales_phone = st.text_input("Representative Number", "+91 98765 43210")
-            project_name = st.text_input("Project Name", "Greenway Heights Tower A")
-            project_address = st.text_input("Project Address", "Plot 42, GIDC Road")
-            city = st.text_input("City", "Vadodara")
-            priority = st.selectbox("Priority Class", ["A", "B", "C"], format_func=lambda x: f"{x} - High/Medium/Low")
-        
-        with col2:
-            st.subheader("Stakeholder Contacts")
-            client_name = st.text_input("Client Name", "Client Company Ltd")
-            client_phone = st.text_input("Client Number", "+91 99999 88888")
-            architect_name = st.text_input("Architect Name", "Architect Consultant")
-            architect_phone = st.text_input("Architect Number", "+91 99999 77777")
-            mep_name = st.text_input("MEP Plumbing Consultant", "Plumbing Design Labs")
-            mep_phone = st.text_input("MEP Contact Number", "+91 99999 66666")
+if active_template_source:
+    if st.button("Generate Official Huliot Word File", type="primary", use_container_width=True):
+        try:
+            doc = Document(active_template_source)
 
-            st.subheader("Attached Drawings Checklist")
-            drw_typical = st.checkbox("All or Typical Floor drawing attached", True)
-            drw_toilet_kitchen = st.checkbox("Typical Toilet and kitchen section details", False)
-            drw_podium = st.checkbox("Podium/ Diversion/ Basement drawing", False)
-            drw_building = st.checkbox("Full Building section view", False)
-            drw_arch_only = st.checkbox("Only Architectural layout", False)
-            drw_other = st.checkbox("Any Other drawing attached", False)
-            drw_other_text = st.text_input("Describe other drawing details", "")
+            # Dictionary of simple placeholder text values
+            text_replacements = {
+                # General fields
+                "Date:": f"Date: {st.session_state.date}",
+                "Bitrix deal ID:": f"Bitrix deal ID: {st.session_state.projectNo}",
+                "Huliot Sales Person & No:": f"Huliot Sales Person & No: {st.session_state.salesPerson} {st.session_state.salesPhone}",
+                "Project Name & Address:": f"Project Name & Address: {st.session_state.projectName} {st.session_state.projectAddress}",
+                "City:": f"City: {st.session_state.city}",
+                "Costumer / Client Name & No:": f"Costumer / Client Name & No: {st.session_state.clientName} {st.session_state.clientPhone}",
+                "Architect Name & No:": f"Architect Name & No: {st.session_state.architectName} {st.session_state.architectPhone}",
+                "MEP Consultant Name & No:": f"MEP Consultant Name & No: {st.session_state.mepName} {st.session_state.mepPhone}",
+                
+                # Technical metadata
+                "No of Typical floors:": f"No of Typical floors: {st.session_state.floors}",
+                "No of shafts:": f"No of shafts: {st.session_state.shafts}",
+                "No of rooms:": f"No of rooms: {st.session_state.rooms}",
+                "Room/floor to floor height in meter:": f"Room/floor to floor height in meter: {st.session_state.floorHeight}",
+                "Estimated date to close the offer.": f"Estimated date to close the offer. {st.session_state.offerDate}",
+                "Probability ---": f"Probability --- {st.session_state.probability}%",
 
-    with tab2:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("Drainage Specifications")
-            drn_int_us = st.checkbox("Internal Toilets - Ultra Silent", True)
-            drn_int_ht = st.checkbox("Internal Toilets - HT Pro", False)
-            drn_vert_us = st.checkbox("Vertical/ External stack - Ultra Silent", True)
-            drn_vert_ht = st.checkbox("Vertical/ External stack - HT Pro", False)
-            drn_pod_us = st.checkbox("Podium/Diversion/ Basement – Ultra Silent", False)
-            drn_pod_ht = st.checkbox("Podium/Diversion/ Basement - HT Pro", False)
-            
-        with col2:
-            st.subheader("Water Supply Pipes & Fittings")
-            ws_int_pipe_pert = st.checkbox("Internal Pipe - PERT/AL/PERT", True)
-            ws_int_pipe_ppr = st.checkbox("Internal Pipe - PPR", False)
-            ws_int_fit_ppsu = st.checkbox("Internal Fittings - PPSU", True)
-            ws_int_fit_brass = st.checkbox("Internal Fittings - Brass", False)
-            
-            ws_ext_pipe_pert = st.checkbox("External Pipe - PERT/AL/PERT", True)
-            ws_ext_pipe_ppr = st.checkbox("External Pipe - PPR", False)
-            ws_ext_fit_ppsu = st.checkbox("External Fittings - PPSU", True)
-            ws_ext_fit_brass = st.checkbox("External Fittings - Brass", False)
-            
-            ws_ter_pipe_pert = st.checkbox("Terrace Pipe - PERT/AL/PERT", False)
-            ws_ter_pipe_ppr = st.checkbox("Terrace Pipe - PPR", False)
-            ws_ter_fit_ppsu = st.checkbox("Terrace Fittings - PPSU", False)
-            ws_ter_fit_brass = st.checkbox("Terrace Fittings - Brass", False)
+                # Sunken depths
+                "Toilet Sunken- if Sunken How much in mm:": f"Toilet Sunken- if Sunken How much in mm: {st.session_state.rteToiletMM if st.session_state.rteToiletSunken else ''}",
+                "Kitchen Sunken- if Sunken How much in mm:": f"Kitchen Sunken- if Sunken How much in mm: {st.session_state.rteKitchenMM if st.session_state.rteKitchenSunken else ''}",
+                "Utility Sunken- if Sunken How much in mm:": f"Utility Sunken- if Sunken How much in mm: {st.session_state.rteUtilityMM if st.session_state.rteUtilitySunken else ''}",
+                "if yes where:": f"if yes where: {st.session_state.serviceFloorWhere if st.session_state.serviceFloor == 'Yes' else ''}",
 
-    with tab3:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("Building Specifications")
-            building_type = st.selectbox("Kind of Building", [
-                "Office / commercial", "Shopping centre", "Hotel / Restaurant", "Industrial", 
-                "Hospital / nursing home", "School", "Social housing", "Sport facility", "Infrastructure", "Residential"
-            ], index=0)
-            floors = st.text_input("No of Typical floors", "12")
-            shafts = st.text_input("No of shafts", "4")
-            rooms = st.text_input("No of rooms", "84")
-            floor_height = st.text_input("Room/floor to floor height in meter", "3.2")
-            offer_date = st.text_input("Estimated date to close offer", "30.06.2026")
-            probability = st.slider("Probability (%)", 0, 100, 50)
+                # Summary inputs
+                "Toilet is suspended: -": f"Toilet is suspended: - {'Yes (Ceiling Suspended)' if st.session_state.rteCeiling else 'No'}",
+                "Kitchen is suspended: -": f"Kitchen is suspended: - {'Yes (Ceiling Suspended)' if st.session_state.rteCeiling else 'No'}",
+            }
 
-        with col2:
-            st.subheader("Calculation Configurations")
-            calc_drainage = st.selectbox("Drainage system requirements", [
-                ("single-stack", "Single Stack System – HULIOT design drawing, BOQ & Quotation"),
-                ("two-stack", "Two Stack System (soil / waste / vent) – HULIOT design"),
-                ("consultant-drawing", "Same as per Client/ Consultant drawing - BOQ Quantity only")
-            ], format_func=lambda x: x[1])
-            
-            boq_compare = st.multiselect("BOQ is compared with", ["PVC", "Cast Iron", "HDPE", "CPVC/UPVC/OTHER"], default=["PVC"])
-            calc_for = st.selectbox("Calculation design scale", [
-                ("one-shaft", "one shaft"),
-                ("all-shafts", "all shafts"),
-                ("with-basement", "including basement")
-            ], format_func=lambda x: x[1])
+            # Helper function to modify paragraph text
+            def run_replacements(p):
+                for old_patt, new_text in text_replacements.items():
+                    if old_patt in p.text:
+                        # Use a safe regex or raw split-replace to preserve the parent formatting
+                        p.text = p.text.replace(old_patt, new_text)
 
-            st.subheader("Pipe Routing Options")
-            rte_ceiling = st.checkbox("Within false ceiling / suspended / underslung system", True)
-            rte_toilet_sunken = st.checkbox("Toilet Sunken")
-            rte_toilet_mm = st.text_input("Toilet Sunken depth in mm", "250") if rte_toilet_sunken else "0"
-            rte_kitchen_sunken = st.checkbox("Kitchen Sunken")
-            rte_kitchen_mm = st.text_input("Kitchen Sunken depth in mm", "250") if rte_kitchen_sunken else "0"
-            rte_utility_sunken = st.checkbox("Utility Sunken")
-            rte_utility_mm = st.text_input("Utility Sunken depth in mm", "250") if rte_utility_sunken else "0"
+            # Apply replacements on main layout paragraphs
+            for paragraph in doc.paragraphs:
+                run_replacements(paragraph)
 
-            ws_ceiling_drop = st.checkbox("Water supply - within false ceiling & pipe drop ceiling")
-            ws_wall_case = st.checkbox("Water supply - in wall chasing piping full")
-            
-            service_floor = st.radio("Service floor available", ["Yes", "No"], index=1)
-            service_floor_where = st.text_input("If Yes, specify location", "") if service_floor == "Yes" else ""
+            # Map checkbox replacements by parsing specific runs inside paragraphs
+            checkbox_map = {
+                # Drawings
+                "All or Typical Floor drawing": st.session_state.drwTypical,
+                "Typical Toilet and kitchen section details": st.session_state.drwToiletKitchen,
+                "Podium/ Diversion/ Basement drawing": st.session_state.drwPodium,
+                "Full Building section view attached": st.session_state.drwBuilding,
+                "Only Architectural layout attached": st.session_state.drwArchOnly,
+                "Any Other drawing attached": st.session_state.drwOther,
 
-    st.write("---")
-    
-    data = {
-        'date': str(date) if date else "",
-        'project_no': project_no,
-        'sales_person': sales_person,
-        'sales_phone': sales_phone,
-        'project_name': project_name,
-        'project_address': project_address,
-        'city': city,
-        'client_name': client_name,
-        'client_phone': client_phone,
-        'architect_name': architect_name,
-        'architect_phone': architect_phone,
-        'mep_name': mep_name,
-        'mep_phone': mep_phone,
-        'drw_typical': drw_typical,
-        'drw_toilet_kitchen': drw_toilet_kitchen,
-        'drw_podium': drw_podium,
-        'drw_building': drw_building,
-        'drw_arch_only': drw_arch_only,
-        'drw_other': drw_other,
-        'drw_other_text': drw_other_text,
-        'drn_int_us': drn_int_us,
-        'drn_int_ht': drn_int_ht,
-        'drn_vert_us': drn_vert_us,
-        'drn_vert_ht': drn_vert_ht,
-        'drn_pod_us': drn_pod_us,
-        'drn_pod_ht': drn_pod_ht,
-        'ws_int_pipe_pert': ws_int_pipe_pert,
-        'ws_int_pipe_ppr': ws_int_pipe_ppr,
-        'ws_int_fit_ppsu': ws_int_fit_ppsu,
-        'ws_int_fit_brass': ws_int_fit_brass,
-        'ws_ext_pipe_pert': ws_ext_pipe_pert,
-        'ws_ext_pipe_ppr': ws_ext_pipe_ppr,
-        'ws_ext_fit_ppsu': ws_ext_fit_ppsu,
-        'ws_ext_fit_brass': ws_ext_fit_brass,
-        'ws_ter_pipe_pert': ws_ter_pipe_pert,
-        'ws_ter_pipe_ppr': ws_ter_pipe_ppr,
-        'ws_ter_fit_ppsu': ws_ter_fit_ppsu,
-        'ws_ter_fit_brass': ws_ter_fit_brass,
-        'priority': priority,
-        'building_type': building_type,
-        'floors': floors,
-        'shafts': shafts,
-        'rooms': rooms,
-        'floor_height': floor_height,
-        'offer_date': offer_date,
-        'probability': probability,
-        'calc_drainage': calc_drainage[0],
-        'boq_compare': boq_compare,
-        'calc_for': calc_for[0],
-        'rte_ceiling': rte_ceiling,
-        'rte_toilet_sunken': rte_toilet_sunken,
-        'rte_toilet_mm': rte_toilet_mm,
-        'rte_kitchen_sunken': rte_kitchen_sunken,
-        'rte_kitchen_mm': rte_kitchen_mm,
-        'rte_utility_sunken': rte_utility_sunken,
-        'rte_utility_mm': rte_utility_mm,
-        'ws_ceiling_drop': ws_ceiling_drop,
-        'ws_wall_case': ws_wall_case,
-        'service_floor': service_floor,
-        'service_floor_where': service_floor_where,
-        'toilet_suspended': "Yes" if rte_ceiling else "No",
-        'kitchen_sunken': f"Toilet: {rte_toilet_mm}mm, Kitchen: {rte_kitchen_mm}mm, Utility: {rte_utility_mm}mm" if (rte_toilet_sunken or rte_kitchen_sunken or rte_utility_sunken) else "No",
-        'kitchen_suspended': "Yes" if rte_ceiling else "No"
-    }
+                # Drainage Pipes
+                "Internal Toilets -Ultra Silent": st.session_state.drnIntUS,
+                "Internal Toilets -HT Pro": st.session_state.drnIntHT,
+                "Vertical/ External stack -Ultra Silent": st.session_state.drnVertUS,
+                "Vertical/ External stack -HT Pro": st.session_state.drnVertHT,
+                "Podium/Diversion/ Basement – Ultra Silent": st.session_state.drnPodUS,
+                "Podium/Diversion/ Basement - HT Pro": st.session_state.drnPodHT,
 
-    if st.button("🚀 Build Completed Word Document", type="primary"):
-        with st.spinner("Injecting values to original document structure..."):
-            try:
-                processed_data = process_document(template_data, data)
-                st.success("🎉 Word document created successfully with no format alterations!")
-                st.download_button(
-                    label="⬇️ Download Verbatim Filled Document (.docx)",
-                    data=processed_data,
-                    file_name=f"Checklist_Huliot_{project_no}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
-            except Exception as e:
-                st.error(f"Failed to process original template. Please check file schema. Error details: {e}")
+                # Water supply Pipes
+                "Internal Pipe  (PERT/AL/PERT)": st.session_state.wsIntPipePERT,
+                "Internal Pipe  (PPR)": st.session_state.wsIntPipePPR,
+                "Internal Fittings   PPSU": st.session_state.wsIntFitPPSU,
+                "Internal Fittings   BRASS": st.session_state.wsIntFitBrass,
+                "External Pipe  (PERT/AL/PERT)": st.session_state.wsExtPipePERT,
+                "External Pipe  (PPR)": st.session_state.wsExtPipePPR,
+                "External Fittings   PPSU": st.session_state.wsExtFitPPSU,
+                "External Fittings   BRASS": st.session_state.wsExtFitBrass,
+                "Terrace looping Pipe  (PERT/AL/PERT)": st.session_state.wsTerPipePERT,
+                "Terrace looping Pipe  (PPR)": st.session_state.wsTerPipePPR,
+                "Terrace looping Fittings   PPSU": st.session_state.wsTerFitPPSU,
+                "Terrace looping Fittings   BRASS": st.session_state.wsTerFitBrass,
+
+                # Priority level
+                "A: High": st.session_state.priority == "A: High",
+                "B: Medium": st.session_state.priority == "B: Medium",
+                "C: Low": st.session_state.priority == "C: Low",
+
+                # Kind of Building
+                "Office / commercial building": st.session_state.buildingType == "Office / commercial building",
+                "Shopping centre": st.session_state.buildingType == "Shopping centre",
+                "Hotel / Restaurant": st.session_state.buildingType == "Hotel / Restaurant",
+                "Industrial building": st.session_state.buildingType == "Industrial building",
+                "Hospital / nursing home": st.session_state.buildingType == "Hospital / nursing home",
+                "School building": st.session_state.buildingType == "School building",
+                "Social housing": st.session_state.buildingType == "Social housing",
+                "Sport facility": st.session_state.buildingType == "Sport facility",
+                "Infrastructure buildings": st.session_state.buildingType == "Infrastructure buildings",
+                "Residential building": st.session_state.buildingType == "Residential building",
+
+                # Calculation options
+                "Single Stack System": "single-stack" in st.session_state.calcDrainage,
+                "Two Stack System": "Two Stack System" in st.session_state.calcDrainage,
+                "Drainage- Same as per Client": "Consultant drawing" in st.session_state.calcDrainage,
+
+                # Comparison parameters
+                "PVC": "PVC" in st.session_state.boqCompare,
+                "Cast Iron": "Cast Iron" in st.session_state.boqCompare,
+                "HDPE": "HDPE" in st.session_state.boqCompare,
+                "CPVC/UPVC/OTHER": "CPVC/UPVC/OTHER" in st.session_state.boqCompare,
+
+                # Routing options
+                "Within false ceiling/ ceiling suspended": st.session_state.rteCeiling,
+                "Toilet Sunken-": st.session_state.rteToiletSunken,
+                "Kitchen Sunken-": st.session_state.rteKitchenSunken,
+                "Utility Sunken-": st.session_state.rteUtilitySunken,
+                "Within false ceiling & Pipe drop": st.session_state.wsCeilingDrop,
+                "In wall chasing piping full": st.session_state.wsWallChase,
+
+                # Service floor
+                "Yes    No": True if st.session_state.serviceFloor else False,
+
+                # Calculation target scale
+                "one shaft": st.session_state.calcFor == "one shaft",
+                "all shafts": st.session_state.calcFor == "all shafts",
+                "including basement": st.session_state.calcFor == "including basement",
+            }
+
+            # Loop through tables and update paragraphs inside document tables
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            run_replacements(paragraph)
+
+            # High fidelity checkbox alignment parser
+            def process_paragraph_checkboxes(p):
+                text_content = p.text
+                for marker, is_checked in checkbox_map.items():
+                    if marker in text_content:
+                        # Find occurrences of empty/filled checkbox symbols and toggle them based on is_checked state
+                        if "☐" in text_content or "[ ]" in text_content or "checkbox" in text_content:
+                            new_symbol = "☑" if is_checked else "☐"
+                            for run in p.runs:
+                                if "☐" in run.text:
+                                    run.text = run.text.replace("☐", new_symbol)
+                                elif "[ ]" in run.text:
+                                    run.text = run.text.replace("[ ]", f"[{new_symbol}]")
+
+            # Check inside standard body list structure
+            for paragraph in doc.paragraphs:
+                process_paragraph_checkboxes(paragraph)
+
+            # Check inside tables cells structures
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            process_paragraph_checkboxes(paragraph)
+
+            # Handle Service Floor Yes/No checkboxes specifically
+            for paragraph in doc.paragraphs:
+                if "Service floor available:" in paragraph.text:
+                    for run in paragraph.runs:
+                        if "Yes" in run.text and st.session_state.serviceFloor == "Yes":
+                            run.text = run.text.replace("☐", "☑")
+                        elif "No" in run.text and st.session_state.serviceFloor == "No":
+                            run.text = run.text.replace("☐", "☑")
+
+            # Handle summary text block replacement at the end of the document
+            for paragraph in doc.paragraphs:
+                if "Kitchen / Utility is sunken" in paragraph.text:
+                    sunk_summary = []
+                    if st.session_state.rteToiletSunken:
+                        sunk_summary.append(f"Toilet: {st.session_state.rteToiletMM}mm")
+                    if st.session_state.rteKitchenSunken:
+                        sunk_summary.append(f"Kitchen: {st.session_state.rteKitchenMM}mm")
+                    if st.session_state.rteUtilitySunken:
+                        sunk_summary.append(f"Utility: {st.session_state.rteUtilityMM}mm")
+                    
+                    p_text = "Kitchen / Utility is sunken (How much in mm): - " + (", ".join(sunk_summary) if sunk_summary else "No")
+                    paragraph.text = p_text
+
+            # Append the notes paragraph to the doc structure cleanly
+            if st.session_state.notes:
+                p = doc.add_paragraph()
+                p.add_run("\nSpecial Technical Specifications:\n").bold = True
+                p.add_run(st.session_state.notes)
+
+            # Output doc representation as binary streams
+            bin_stream = io.BytesIO()
+            doc.save(bin_stream)
+            bin_stream.seek(0)
+
+            # Expose the download button cleanly
+            st.download_button(
+                label="📥 Download Ready Checklist Document (.docx)",
+                data=bin_stream,
+                file_name=f"Checklist_Huliot_{(st.session_state.projectName or 'Draft').replace(' ', '_')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
+            st.success("File compilation complete! Click the button above to download.")
+        except Exception as err:
+            st.error(f"Failed to process file template correctly. Error: {err}")
+else:
+    st.info("Upload a checklist template (.docx) in the sidebar or commit it to GitHub to compile.")
