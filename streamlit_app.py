@@ -60,12 +60,10 @@ def process_document(template_bytes, data):
     def process_p(paragraph):
         # 1. Base Text Field Variable Replacements
         if "Project No. / Bitrix deal ID:" in paragraph.text:
-            # Support both unicode en-space placeholders and traditional underlines
             replace_text_in_paragraph(paragraph, "     ", data['project_no'])
             replace_text_in_paragraph(paragraph, "_____________", data['project_no'])
             
         if "Date:" in paragraph.text:
-            # Safe replacement of placeholder blanks following 'Date:'
             replace_text_in_paragraph(paragraph, "Date:", f"Date: {data['date']}")
             
         if "Huliot Sales Person & No:" in paragraph.text:
@@ -90,7 +88,6 @@ def process_document(template_bytes, data):
             replace_text_in_paragraph(paragraph, "………………………….", data['offer_date'])
         
         if "Probability ---" in paragraph.text:
-            # Replaces the default template value of 50% with user value
             replace_text_in_paragraph(paragraph, "50%", f"{data['probability']}%")
 
         # 2. Dynamic Explanations / Summary Mapping Updates (Page 3 Bottom)
@@ -347,7 +344,6 @@ if template_data is not None:
 
     st.write("---")
     
-    # Payload collection dictionary mapping directly to Word template variables
     data = {
         'date': str(date) if date else "",
         'project_no': project_no,
@@ -427,27 +423,3 @@ if template_data is not None:
                 )
             except Exception as e:
                 st.error(f"Failed to process original template. Please check file schema. Error details: {e}")
-```
-_Note: `requirements.txt` remains unchanged as it already lists `streamlit>=1.35.0` and `python-docx>=1.1.0`._
-
----
-
-### What to Do Next (Deploying to Streamlit):
-
-Your GitHub repository pictured in `image_7bed20.png` is perfectly organized! To deploy your working application, follow these simple steps:
-
-1. **Log in to Streamlit Community Cloud**:
-   * Open your web browser and go to [share.streamlit.io](https://share.streamlit.io/).
-   * Click the **"Connect GitHub"** or **"Sign In with GitHub"** button and log in with your GitHub account credentials.
-
-2. **Deploy your Repository**:
-   * Click the **"New app"** button in the top right of your Streamlit Dashboard.
-   * Under **Repository**, select your repository: `plumco/huliot_eze_checklist`.
-   * Under **Branch**, select `main`.
-   * Under **Main file path**, type: `streamlit_app.py`.
-
-3. **Launch the Workstation**:
-   * Click **"Deploy!"** at the bottom of the page.
-   * Streamlit will spend 1–2 minutes setting up your server, installing `python-docx` and `streamlit` as specified in `requirements.txt`, and launching your app.
-
-Once deployed, the app will automatically load your uploaded Word template file `Checklist -Questinorie for Huliot (Drainage and Water supply)_3.docx` directly from your GitHub directory and allow you to generate perfectly formatted Word documents!
