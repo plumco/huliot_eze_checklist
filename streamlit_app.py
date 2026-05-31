@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom branding CSS
+# Custom branding CSS with correct Streamlit parameter
 st.markdown("""
     <style>
     .brand-title {
@@ -38,7 +38,7 @@ st.markdown("""
         margin-bottom: 15px;
     }
     </style>
-""", unsafe_allow_class_html=True)
+""", unsafe_allow_html=True)
 
 INIT_VALUES = {
     "date": "",
@@ -125,7 +125,7 @@ st.markdown('<div class="brand-title">Huliot<span style="color:#555555; font-wei
 st.markdown('<div class="brand-subtitle">WE MAKE IT FLOW</div>', unsafe_allow_html=True)
 
 st.title("Checklist Workstation & DOCX Exporter")
-st.write("Fill in the fields below. The application will find your template and replace the placeholders and toggle checkboxes verbatim.")
+st.write("Fill in the fields below. The application will find your template and replace placeholders and toggle checkboxes verbatim.")
 
 st.sidebar.header("System Controls")
 
@@ -350,12 +350,30 @@ if active_template_source:
                 "Kitchen is suspended: -": f"Kitchen is suspended: - {'Yes (Ceiling Suspended)' if st.session_state.rteCeiling else 'No'}",
             }
 
-            # Helper function to modify paragraph text
+            # Helper function to safely replace placeholder text while retaining active run styles (fonts, bold, margins, colors, borders)
+            def safe_replace(p, old_text, new_text):
+                if old_text in p.text:
+                    # 1. First, search inside separate runs (keeps formatting entirely pristine)
+                    for run in p.runs:
+                        if old_text in run.text:
+                            run.text = run.text.replace(old_text, new_text)
+                            return True
+                    # 2. If split across multiple runs, merge text safely on paragraph-run levels to prevent style loss
+                    full_text = "".join(r.text for r in p.runs)
+                    if old_text in full_text:
+                        new_full_text = full_text.replace(old_text, new_text)
+                        if len(p.runs) > 0:
+                            p.runs[0].text = new_full_text
+                            for r in p.runs[1:]:
+                                r.text = ""
+                            return True
+                return False
+
+            # Helper function to process run text replacements across paragraphs
             def run_replacements(p):
                 for old_patt, new_text in text_replacements.items():
                     if old_patt in p.text:
-                        # Use a safe regex or raw split-replace to preserve the parent formatting
-                        p.text = p.text.replace(old_patt, new_text)
+                        safe_replace(p, old_patt, new_text)
 
             # Apply replacements on main layout paragraphs
             for paragraph in doc.paragraphs:
@@ -411,9 +429,9 @@ if active_template_source:
                 "Residential building": st.session_state.buildingType == "Residential building",
 
                 # Calculation options
-                "Single Stack System": "single-stack" in st.session_state.calcDrainage,
-                "Two Stack System": "Two Stack System" in st.session_state.calcDrainage,
-                "Drainage- Same as per Client": "Consultant drawing" in st.session_state.calcDrainage,
+                "Single Stack System": "single-stack" in st.session_state.calcDrainage or "Single Stack" in st.session_state.calcDrainage,
+                "Two Stack System": "Two Stack System" in st.session_state.calcDrainage or "Two Stack" in st.session_state.calcDrainage,
+                "Drainage- Same as per Client": "Consultant drawing" in st.session_state.calcDrainage or "Same as per" in st.session_state.calcDrainage,
 
                 # Comparison parameters
                 "PVC": "PVC" in st.session_state.boqCompare,
@@ -429,23 +447,20 @@ if active_template_source:
                 "Within false ceiling & Pipe drop": st.session_state.wsCeilingDrop,
                 "In wall chasing piping full": st.session_state.wsWallChase,
 
-                # Service floor
-                "Yes    No": True if st.session_state.serviceFloor else False,
-
                 # Calculation target scale
                 "one shaft": st.session_state.calcFor == "one shaft",
                 "all shafts": st.session_state.calcFor == "all shafts",
                 "including basement": st.session_state.calcFor == "including basement",
             }
 
-            # Loop through tables and update paragraphs inside document tables
+            # Loop through tables and update paragraphs inside document tables safely
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
                         for paragraph in cell.paragraphs:
                             run_replacements(paragraph)
 
-            # High fidelity checkbox alignment parser
+            # High fidelity checkbox alignment parser that preserves style
             def process_paragraph_checkboxes(p):
                 text_content = p.text
                 for marker, is_checked in checkbox_map.items():
@@ -470,16 +485,25 @@ if active_template_source:
                         for paragraph in cell.paragraphs:
                             process_paragraph_checkboxes(paragraph)
 
-            # Handle Service Floor Yes/No checkboxes specifically
-            for paragraph in doc.paragraphs:
-                if "Service floor available:" in paragraph.text:
-                    for run in paragraph.runs:
+            # Handle Service Floor Yes/No checkboxes specifically inside body text and tables
+            def process_service_floor(p):
+                if "Service floor available:" in p.text:
+                    for run in p.runs:
                         if "Yes" in run.text and st.session_state.serviceFloor == "Yes":
                             run.text = run.text.replace("☐", "☑")
                         elif "No" in run.text and st.session_state.serviceFloor == "No":
                             run.text = run.text.replace("☐", "☑")
 
-            # Handle summary text block replacement at the end of the document
+            for paragraph in doc.paragraphs:
+                process_service_floor(paragraph)
+
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            process_service_floor(paragraph)
+
+            # Handle summary text block replacement at the end of the document safely
             for paragraph in doc.paragraphs:
                 if "Kitchen / Utility is sunken" in paragraph.text:
                     sunk_summary = []
@@ -491,7 +515,7 @@ if active_template_source:
                         sunk_summary.append(f"Utility: {st.session_state.rteUtilityMM}mm")
                     
                     p_text = "Kitchen / Utility is sunken (How much in mm): - " + (", ".join(sunk_summary) if sunk_summary else "No")
-                    paragraph.text = p_text
+                    safe_replace(paragraph, paragraph.text, p_text)
 
             # Append the notes paragraph to the doc structure cleanly
             if st.session_state.notes:
